@@ -12,23 +12,13 @@ the Jetson Orin Nano Developer Kit.
 | Kernel change | `CONFIG_IP_SCTP=m` |
 | Build | Native `aarch64` build from pinned NVIDIA sources |
 | Boot strategy | Separate `oai-sctp` entry with the stock `primary` entry preserved |
-| Lab role | SCTP-capable Jetson DU host for the OAI CU/DU split |
-
-## Companion projects
-
-| Repository | Role |
-|---|---|
-| [`promaaa/oai-cu-du-lab`](https://github.com/promaaa/oai-cu-du-lab) | Canonical deployment tooling, configuration, validation, and rollback |
-| [`promaaa/kaust-5G-research`](https://github.com/promaaa/kaust-5G-research) | Research reports, measurements, figures, and experiment history |
-
-This repository is limited to Jetson kernel provisioning. The lab repository
-remains the operational source of truth for OpenAirInterface deployments.
+| Purpose | SCTP support with NVIDIA OOT driver compatibility |
 
 ## Why a custom kernel
 
-The stock NVIDIA kernel does not enable SCTP, which OAI uses for F1-C signaling
-between the central and distributed units. A usable replacement must also keep
-the NVIDIA out-of-tree and display modules aligned with the kernel build.
+The stock NVIDIA kernel does not enable SCTP. Applications that rely on SCTP
+therefore need a custom kernel, while the NVIDIA out-of-tree and display modules
+must remain aligned with that kernel build.
 
 The scripts therefore build the kernel, in-tree modules, NVIDIA OOT modules,
 and display modules from one verified source bundle. They also account for the
@@ -136,5 +126,3 @@ tests/extlinux.test.sh
 
 After boot, `verify_kernel.sh` confirms the expected kernel-release marker,
 loads the SCTP module, queries SCTP support, and checks NVIDIA userspace.
-End-to-end F1 association, radio behavior, and rollback evidence belong in the
-canonical lab repository.
