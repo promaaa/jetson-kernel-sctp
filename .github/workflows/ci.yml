@@ -1,0 +1,43 @@
+name: Validate scripts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Check shell scripts
+        run: shellcheck scripts/*.sh tests/*.sh
+
+      - name: Test boot configuration updates
+        run: tests/extlinux.test.sh
+
+      - name: Validate pinned NVIDIA source metadata
+        run: |
+          source sources.env
+          test "${#SOURCE_SHA256}" -eq 64
+          test "${SOURCE_SIZE_BYTES}" -gt 0
+          case "${SOURCE_URL}" in
+            https://developer.download.nvidia.com/*) ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Scan Git history for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

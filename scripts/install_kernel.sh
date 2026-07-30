@@ -1,80 +1,79 @@
 #!/usr/bin/env bash
 
-# install_kernel.sh
-# Automates the safe installation of compiled SCTP kernel Image, modules, initrd, and updates extlinux.conf.
-# To be run natively on the Jetson Orin Nano board.
-
 set -euo pipefail
 
-WORKSPACE_DIR="${HOME}/jetson-kernel-build"
-KERNEL_VERSION="5.15.148-tegra-oai-sctp-tegra-oai-sctp"
-SOURCE_DIR="${WORKSPACE_DIR}/Linux_for_Tegra/source"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../sources.env disable=SC1091
+source "${REPO_DIR}/sources.env"
 
-echo "=== Jetson Orin Nano SCTP Kernel Installer ==="
-echo "Target Kernel Version: ${KERNEL_VERSION}"
-echo "Source Directory     : ${SOURCE_DIR}"
+WORKSPACE_DIR="${JETSON_KERNEL_WORKSPACE:-${HOME}/jetson-kernel-build}"
+SOURCE_KEY="${L4T_VERSION}-${SOURCE_SHA256:0:12}"
+SOURCE_ROOT="${WORKSPACE_DIR}/sources/${SOURCE_KEY}"
+SOURCE_DIR="${SOURCE_ROOT}/Linux_for_Tegra/source"
+KERNEL_DIR="${SOURCE_DIR}/kernel/kernel-jammy-src"
+EXTLINUX_CONF="${JETSON_EXTLINUX_CONF:-/boot/extlinux/extlinux.conf}"
+ACTIVATE_CUSTOM_KERNEL=0
 
-# 1. Check if compile was run
-if [[ ! -d "${SOURCE_DIR}/kernel/kernel-5.15" ]]; then
-    echo "ERROR: Compiled sources not found. Run build_kernel.sh first." >&2
+if [[ "${1:-}" == "--activate" ]]; then
+    ACTIVATE_CUSTOM_KERNEL=1
+    shift
+fi
+if (( $# != 0 )); then
+    printf 'Usage: %s [--activate]\n' "$0" >&2
+    exit 2
+fi
+
+[[ -d "${KERNEL_DIR}" ]] || {
+    printf 'ERROR: built sources not found at %s\n' "${KERNEL_DIR}" >&2
     exit 1
-fi
+}
+[[ -f "${KERNEL_DIR}/arch/arm64/boot/Image" ]] || {
+    printf 'ERROR: kernel Image is missing; run build_kernel.sh first\n' >&2
+    exit 1
+}
+[[ -f "${SOURCE_ROOT}/build-inputs.txt" ]] || {
+    printf 'ERROR: build input record is missing; run build_kernel.sh first\n' >&2
+    exit 1
+}
 
-# 2. Backup extlinux.conf
-echo "--- Backing up Boot Configurations ---"
-sudo cp /boot/extlinux/extlinux.conf "/boot/extlinux/extlinux.conf.bak.$(date +%F_%T)"
-echo "Backup created successfully."
+KERNEL_RELEASE="$(make -s -C "${KERNEL_DIR}" kernelrelease)"
+IMAGE_PATH="/boot/Image-${KERNEL_RELEASE}"
+INITRD_PATH="/boot/initrd.img-${KERNEL_RELEASE}"
+BACKUP_PATH="${EXTLINUX_CONF}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
 
-# 3. Install Kernel Image
-echo "--- Installing Kernel Image ---"
-sudo cp "${SOURCE_DIR}/kernel/kernel-5.15/arch/arm64/boot/Image" /boot/Image-oai-sctp
-echo "Image copied to /boot/Image-oai-sctp"
+printf '%s\n' "=== Jetson SCTP Kernel Installer ==="
+printf 'Kernel release : %s\n' "${KERNEL_RELEASE}"
+printf 'Kernel image   : %s\n' "${IMAGE_PATH}"
+printf 'Initrd         : %s\n' "${INITRD_PATH}"
+printf 'Activate       : %s\n' "${ACTIVATE_CUSTOM_KERNEL}"
 
-# 4. Install Modules (In-tree and Out-Of-Tree)
-echo "--- Installing Modules ---"
-cd "${SOURCE_DIR}/kernel/kernel-5.15"
-sudo make modules_install INSTALL_MOD_PATH=/
+sudo test -f "${EXTLINUX_CONF}"
+sudo cp -p "${EXTLINUX_CONF}" "${BACKUP_PATH}"
+printf 'Boot configuration backup: %s\n' "${BACKUP_PATH}"
 
-cd "${SOURCE_DIR}"
-export KERNEL_HEADERS="${SOURCE_DIR}/kernel/kernel-5.15"
-sudo make modules_install INSTALL_MOD_PATH=/ -C kernel/nvidia
-sudo make modules_install INSTALL_MOD_PATH=/ -C nvidia-oot
+sudo install -m 0644 "${KERNEL_DIR}/arch/arm64/boot/Image" "${IMAGE_PATH}"
 
-# Generate module dependencies
-echo "Generating module dependencies..."
-sudo depmod -a "${KERNEL_VERSION}"
-echo "Modules installed successfully under /lib/modules/${KERNEL_VERSION}/"
+printf '%s\n' "--- Installing in-tree modules ---"
+sudo make -C "${KERNEL_DIR}" modules_install INSTALL_MOD_PATH=/
 
-# 5. Generate Custom Initrd
-echo "--- Generating custom Initrd ---"
-sudo mkinitramfs -o /boot/initrd.img-oai-sctp "${KERNEL_VERSION}"
-echo "Initrd generated at /boot/initrd.img-oai-sctp"
+printf '%s\n' "--- Installing NVIDIA out-of-tree modules ---"
+export KERNEL_HEADERS="${KERNEL_DIR}"
+sudo -E make -C "${SOURCE_DIR}" modules_install INSTALL_MOD_PATH=/
 
-# 6. Configure Extlinux BootloaderSafely
-echo "--- Updating extlinux.conf ---"
+sudo depmod -a "${KERNEL_RELEASE}"
+sudo mkinitramfs -o "${INITRD_PATH}" "${KERNEL_RELEASE}"
 
-# Extract root partitions options from primary entry
-ROOT_LINE=$(grep -E '^\s*APPEND' /boot/extlinux/extlinux.conf | head -n 1 | sed 's/^[[:space:]]*//')
+sudo "${SCRIPT_DIR}/update_extlinux.sh" \
+    "${EXTLINUX_CONF}" \
+    "${KERNEL_RELEASE}" \
+    "${ACTIVATE_CUSTOM_KERNEL}"
 
-# Check if entry already exists
-if grep -q "LABEL oai-sctp" /boot/extlinux/extlinux.conf; then
-    echo "OAI SCTP bootloader entry already exists, skipping append."
+printf '%s\n' "=== Installation completed ==="
+if (( ACTIVATE_CUSTOM_KERNEL == 1 )); then
+    printf '%s\n' "The custom entry is now the default. Reboot when ready."
 else
-    echo "Appending oai-sctp custom entry to /boot/extlinux/extlinux.conf..."
-    sudo sh -c "cat >> /boot/extlinux/extlinux.conf <<EOF
-
-LABEL oai-sctp
-      MENU LABEL custom-tegra-oai-sctp kernel with SCTP
-      LINUX /boot/Image-oai-sctp
-      INITRD /boot/initrd.img-oai-sctp
-      ${ROOT_LINE}
-EOF"
+    printf '%s\n' "The existing default boot entry was preserved."
+    printf 'Review %s, then rerun with --activate to select the custom kernel.\n' "${EXTLINUX_CONF}"
 fi
-
-# Set default boot entry to custom SCTP kernel
-echo "Setting DEFAULT entry to oai-sctp..."
-sudo sed -i 's/^DEFAULT.*/DEFAULT oai-sctp/' /boot/extlinux/extlinux.conf
-
-echo "=== Installation Complete! ==="
-echo "Please reboot your Jetson: sudo reboot"
-echo "After rebooting, verify support with: uname -r && checksctp"
+printf 'After boot: %s\n' "${SCRIPT_DIR}/verify_kernel.sh"

@@ -1,110 +1,149 @@
 #!/usr/bin/env bash
 
-# build_kernel.sh
-# Automates downloading, extracting, and compiling custom SCTP kernel and NVIDIA out-of-tree modules on Jetson Orin Nano (L4T R36.4.4 / JP 6.2).
-# To be run natively on the Jetson Orin Nano board.
-
 set -euo pipefail
 
-# 1. Configurable Parameters
-L4T_VERSION="R36.4.4"
-SOURCE_URL="https://developer.nvidia.com/downloads/embedded/l4t/r36_release_v4.4/sources/public_sources.tbz2"
-WORKSPACE_DIR="${HOME}/jetson-kernel-build"
-SWAP_SIZE_GB=4
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=../sources.env disable=SC1091
+source "${REPO_DIR}/sources.env"
 
-echo "=== Jetson Orin Nano SCTP Kernel Builder ==="
-echo "Target BSP Release: ${L4T_VERSION}"
-echo "Build Directory   : ${WORKSPACE_DIR}"
+WORKSPACE_DIR="${JETSON_KERNEL_WORKSPACE:-${HOME}/jetson-kernel-build}"
+SOURCE_KEY="${L4T_VERSION}-${SOURCE_SHA256:0:12}"
+SOURCE_ROOT="${WORKSPACE_DIR}/sources/${SOURCE_KEY}"
+SOURCE_DIR="${SOURCE_ROOT}/Linux_for_Tegra/source"
+KERNEL_DIR="${SOURCE_DIR}/kernel/kernel-jammy-src"
+ARCHIVE_PATH="${WORKSPACE_DIR}/downloads/public_sources-${L4T_VERSION}.tbz2"
+SWAP_FILE="${JETSON_KERNEL_SWAP_FILE:-/swapfile_build}"
+SWAP_SIZE_GB="${JETSON_KERNEL_SWAP_SIZE_GB:-4}"
+BUILD_JOBS="${JETSON_KERNEL_BUILD_JOBS:-4}"
 
-# 2. Check System Requirements
-if [[ $(uname -m) != "aarch64" ]]; then
-    echo "ERROR: This script must be run natively on the Jetson Orin Nano (aarch64 architecture)." >&2
+fail() {
+    printf 'ERROR: %s\n' "$*" >&2
     exit 1
+}
+
+sha256_file() {
+    sha256sum "$1" | awk '{print $1}'
+}
+
+printf '%s\n' "=== Jetson Orin Nano SCTP Kernel Builder ==="
+printf 'Target BSP release : %s\n' "${L4T_VERSION}"
+printf 'Target JetPack     : %s\n' "${JETPACK_VERSION}"
+printf 'Source SHA-256     : %s\n' "${SOURCE_SHA256}"
+printf 'Build directory    : %s\n' "${SOURCE_ROOT}"
+printf 'Parallel jobs      : %s\n' "${BUILD_JOBS}"
+
+[[ "$(uname -m)" == "aarch64" ]] ||
+    fail "this native build must run on the Jetson (aarch64)"
+[[ "${BUILD_JOBS}" =~ ^[1-9][0-9]*$ ]] || fail "JETSON_KERNEL_BUILD_JOBS must be a positive integer"
+[[ "${SWAP_SIZE_GB}" =~ ^[1-9][0-9]*$ ]] || fail "JETSON_KERNEL_SWAP_SIZE_GB must be a positive integer"
+
+if [[ -r /etc/nv_tegra_release ]]; then
+    tr -d '\r' </etc/nv_tegra_release | head -1
 fi
 
-# 3. Create Swap Space (Critical for native build RAM limits)
-echo "--- Checking Memory and Configuring Swap ---"
-TOTAL_RAM_GB=$(free -g | awk '/^Mem:/{print $2}')
-echo "Detected RAM: ${TOTAL_RAM_GB} GB"
-if [[ ${TOTAL_RAM_GB} -lt 12 ]]; then
-    echo "Configuring a temporary ${SWAP_SIZE_GB}GB swap space to prevent link-time Out-Of-Memory crashes..."
-    if ! swapon --show | grep -q "/swapfile_build"; then
-        sudo swapoff -a || true
-        sudo dd if=/dev/zero of=/swapfile_build bs=1M count=$((SWAP_SIZE_GB * 1024)) status=progress
-        sudo chmod 600 /swapfile_build
-        sudo mkswap /swapfile_build
-        sudo swapon /swapfile_build
-        echo "Swap space successfully activated."
+printf '%s\n' "--- Installing build dependencies ---"
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    bc \
+    bison \
+    build-essential \
+    checkpolicy \
+    flex \
+    initramfs-tools \
+    libelf-dev \
+    libncurses-dev \
+    libssl-dev \
+    lksctp-tools \
+    rsync \
+    wget
+
+TOTAL_RAM_GB="$(free -g | awk '/^Mem:/{print $2}')"
+printf 'Detected RAM: %s GB\n' "${TOTAL_RAM_GB}"
+if (( TOTAL_RAM_GB < 12 )); then
+    if swapon --show=NAME --noheadings | awk '{$1=$1};1' | grep -Fxq "${SWAP_FILE}"; then
+        printf 'Build swap is already active: %s\n' "${SWAP_FILE}"
     else
-        echo "Build swapfile already active."
+        printf 'Creating dedicated %s GB build swap at %s\n' "${SWAP_SIZE_GB}" "${SWAP_FILE}"
+        if [[ ! -f "${SWAP_FILE}" ]]; then
+            if ! sudo fallocate -l "${SWAP_SIZE_GB}G" "${SWAP_FILE}"; then
+                sudo dd if=/dev/zero of="${SWAP_FILE}" bs=1M \
+                    count="$((SWAP_SIZE_GB * 1024))" status=progress
+            fi
+        fi
+        sudo chmod 600 "${SWAP_FILE}"
+        sudo mkswap "${SWAP_FILE}"
+        sudo swapon "${SWAP_FILE}"
+        printf 'Build swap enabled. Existing swap devices were left unchanged.\n'
     fi
 fi
 
-# 4. Install Compilation Dependencies
-echo "--- Installing Build Dependencies ---"
-sudo apt-get update
-sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev libncurses-dev rsync checkpolicy
-
-# 5. Download and Extract Sources
-mkdir -p "${WORKSPACE_DIR}"
-cd "${WORKSPACE_DIR}"
-
-if [[ ! -f "public_sources.tbz2" ]]; then
-    echo "--- Downloading L4T R36.4.4 BSP Sources ---"
-    wget -O public_sources.tbz2 "${SOURCE_URL}"
-else
-    echo "BSP Sources archive already exists, skipping download."
+mkdir -p "$(dirname -- "${ARCHIVE_PATH}")"
+if [[ ! -f "${ARCHIVE_PATH}" ]]; then
+    printf '%s\n' "--- Downloading pinned NVIDIA public sources ---"
+    wget --https-only --output-document="${ARCHIVE_PATH}" "${SOURCE_URL}"
 fi
 
-echo "--- Extracting Sources ---"
-tar -xjf public_sources.tbz2
-cd Linux_for_Tegra/source
+ACTUAL_SHA256="$(sha256_file "${ARCHIVE_PATH}")"
+[[ "${ACTUAL_SHA256}" == "${SOURCE_SHA256}" ]] ||
+    fail "source checksum mismatch: expected ${SOURCE_SHA256}, got ${ACTUAL_SHA256}"
 
-echo "Extracting kernel sources and NVIDIA OOT drivers..."
-tar -xjf kernel_src.tbz2
-tar -xjf nvidia_kernel_display_driver_source.tbz2
+ACTUAL_SIZE="$(stat --format='%s' "${ARCHIVE_PATH}")"
+[[ "${ACTUAL_SIZE}" == "${SOURCE_SIZE_BYTES}" ]] ||
+    fail "source size mismatch: expected ${SOURCE_SIZE_BYTES}, got ${ACTUAL_SIZE}"
 
-# 6. Configure Kernel with SCTP
-echo "--- Configuring Kernel ---"
-cd kernel/kernel-5.15
+if [[ ! -f "${SOURCE_ROOT}/.source-ready" ]]; then
+    [[ ! -e "${SOURCE_ROOT}" ]] ||
+        fail "incomplete source directory exists at ${SOURCE_ROOT}; inspect and remove it before retrying"
+    mkdir -p "${SOURCE_ROOT}"
+    printf '%s\n' "--- Extracting pinned source bundle ---"
+    tar -xjf "${ARCHIVE_PATH}" -C "${SOURCE_ROOT}"
+    (
+        cd "${SOURCE_DIR}"
+        tar -xjf kernel_src.tbz2
+        tar -xjf kernel_oot_modules_src.tbz2
+        tar -xjf nvidia_kernel_display_driver_source.tbz2
+    )
+    printf '%s\n' "${SOURCE_SHA256}" >"${SOURCE_ROOT}/.source-ready"
+fi
 
-# Clean build directory state
-make mrproper
+[[ -d "${KERNEL_DIR}" ]] || fail "kernel source not found at ${KERNEL_DIR}"
+[[ -f "${SOURCE_DIR}/Makefile" ]] || fail "NVIDIA OOT module Makefile was not extracted"
 
-# Use default Tegra defconfig
-make defconfig
+printf '%s\n' "--- Configuring the kernel ---"
+make -C "${KERNEL_DIR}" mrproper
+make -C "${KERNEL_DIR}" defconfig
+"${KERNEL_DIR}/scripts/config" --file "${KERNEL_DIR}/.config" --set-val CONFIG_IP_SCTP m
+"${KERNEL_DIR}/scripts/config" --file "${KERNEL_DIR}/.config" --set-str CONFIG_LOCALVERSION "${KERNEL_LOCALVERSION}"
+make -C "${KERNEL_DIR}" olddefconfig
+grep -qx 'CONFIG_IP_SCTP=m' "${KERNEL_DIR}/.config"
+grep -qx "CONFIG_LOCALVERSION=\"${KERNEL_LOCALVERSION}\"" "${KERNEL_DIR}/.config"
 
-# Apply SCTP and custom localversion options
-echo "Applying custom SCTP and localversion config parameters..."
-scripts/config --set-val CONFIG_IP_SCTP m
-scripts/config --set-str CONFIG_LOCALVERSION "-tegra-oai-sctp"
+KERNEL_RELEASE="$(make -s -C "${KERNEL_DIR}" kernelrelease)"
+printf 'Derived kernel release: %s\n' "${KERNEL_RELEASE}"
 
-# Validate configuration updates
-make olddefconfig
-echo "Verifying CONFIG_IP_SCTP value:"
-grep -Hn "CONFIG_IP_SCTP" .config
-echo "Verifying CONFIG_LOCALVERSION value:"
-grep -Hn "CONFIG_LOCALVERSION" .config
+printf '%s\n' "--- Building kernel Image and in-tree modules ---"
+make -C "${KERNEL_DIR}" -j"${BUILD_JOBS}" Image modules
 
-# 7. Compile Main Kernel and In-Tree Modules
-echo "--- Compiling Kernel Image (-j4) ---"
-make -j4 Image
+printf '%s\n' "--- Building NVIDIA out-of-tree modules ---"
+export KERNEL_HEADERS="${KERNEL_DIR}"
+make -C "${SOURCE_DIR}" -j"${BUILD_JOBS}" modules
 
-echo "--- Compiling In-Tree Modules (-j4) ---"
-make -j4 modules
+{
+    printf 'repository_commit=%s\n' "$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || printf unknown)"
+    printf 'l4t_version=%s\n' "${L4T_VERSION}"
+    printf 'jetpack_version=%s\n' "${JETPACK_VERSION}"
+    printf 'source_url=%s\n' "${SOURCE_URL}"
+    printf 'source_sha256=%s\n' "${SOURCE_SHA256}"
+    printf 'kernel_release=%s\n' "${KERNEL_RELEASE}"
+    printf 'compiler=%s\n' "$(gcc --version | head -1)"
+    printf 'built_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    dpkg-query -W -f='package=${binary:Package} version=${Version}\n' \
+        bc bison build-essential checkpolicy flex libelf-dev libncurses-dev \
+        libssl-dev rsync 2>/dev/null
+} >"${SOURCE_ROOT}/build-inputs.txt"
 
-# 8. Compile NVIDIA Out-Of-Tree (OOT) Drivers
-echo "--- Compiling NVIDIA OOT display and nvgpu drivers ---"
-cd "${WORKSPACE_DIR}/Linux_for_Tegra/source"
-
-# Set kernel directory environment for OOT compilation
-export KERNEL_HEADERS="${WORKSPACE_DIR}/Linux_for_Tegra/source/kernel/kernel-5.15"
-
-echo "Building nvidia OOT modules..."
-make -j4 modules -C kernel/nvidia
-
-echo "Building nvidia-oot modules..."
-make -j4 modules -C nvidia-oot
-
-echo "=== Build Completed Successfully ==="
-echo "Next step: Run install_kernel.sh to copy artifacts and configure dual-boot entry."
+printf '%s\n' "=== Build completed ==="
+printf 'Kernel release: %s\n' "${KERNEL_RELEASE}"
+printf 'Build inputs  : %s\n' "${SOURCE_ROOT}/build-inputs.txt"
+printf '%s\n' "Next: ${SCRIPT_DIR}/install_kernel.sh"
