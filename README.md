@@ -24,6 +24,10 @@ The scripts therefore build the kernel, in-tree modules, NVIDIA OOT modules,
 and display modules from one verified source bundle. They also account for the
 Jetson's memory constraints and preserve a stock boot path.
 
+Built so a Jetson Orin Nano can run an OpenAirInterface 5G DU, whose F1-C
+interface runs over SCTP. See
+[kaust-5G-research](https://github.com/promaaa/kaust-5G-research).
+
 ## Quick start
 
 Requirements: a Jetson Orin Nano running Jetson Linux R36.4.4 / JetPack 6.2.1,
