@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 50 1200 450" width="1200" height="450" font-family="'Times New Roman', Times, 'Nimbus Roman', 'Liberation Serif', serif">
+<title>Build and boot path of the SCTP kernel drawn as a monochrome journal figure</title>
+<rect y="50" width="1200" height="450" fill="#FFFFFF"/>
+<path d="M140,200 H450" fill="none" stroke="#000000" stroke-width="2.2"/>
+<path d="M570,200 H630" fill="none" stroke="#000000" stroke-width="2.2"/>
+<path d="M750,200 H780 L850,130 H960" fill="none" stroke="#000000" stroke-width="2.2"/>
+<path d="M780,200 L850,270 H960" fill="none" stroke="#000000" stroke-width="2.2" stroke-dasharray="11 6"/>
+<circle cx="140" cy="200" r="5" fill="#FFFFFF" stroke="#000000" stroke-width="2"/>
+<text x="140" y="182" font-size="15" letter-spacing="1.2" fill="#000000" text-anchor="middle">NVIDIA SOURCES</text>
+<text x="140" y="230" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">Jetson Linux R36.4.4</text>
+<circle cx="330" cy="200" r="5" fill="#FFFFFF" stroke="#000000" stroke-width="2"/>
+<text x="330" y="182" font-size="15" letter-spacing="1.2" fill="#000000" text-anchor="middle">SHA-256</text>
+<text x="330" y="230" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">size and hash pinned</text>
+<text x="510" y="154" font-size="15" letter-spacing="1.2" fill="#000000" text-anchor="middle">ON THE JETSON</text>
+<rect x="450.0" y="165.0" width="120" height="70" fill="#FFFFFF" stroke="#000000" stroke-width="2.2"/>
+<text x="510" y="206" font-size="18" fill="#000000" text-anchor="middle">BUILD</text>
+<text x="510" y="258" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">kernel, sctp.ko,</text>
+<text x="510" y="278" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">NVIDIA OOT, display</text>
+<rect x="630.0" y="165.0" width="120" height="70" fill="#FFFFFF" stroke="#000000" stroke-width="2.2"/>
+<text x="690" y="206" font-size="18" fill="#000000" text-anchor="middle">INSTALL</text>
+<text x="690" y="258" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">/boot, /lib/modules</text>
+<text x="690" y="278" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">backup first</text>
+<text x="808" y="206" font-size="16" font-style="italic" fill="#000000" text-anchor="start">extlinux.conf</text>
+<text x="905" y="120" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">rollback</text>
+<text x="905" y="292" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">with --activate</text>
+<text x="1050" y="95" font-size="15" letter-spacing="1.2" fill="#000000" text-anchor="middle">PRIMARY</text>
+<rect x="960.0" y="105.0" width="180" height="50" fill="#FFFFFF" stroke="#000000" stroke-width="2.2"/>
+<text x="1050" y="136" font-size="18" fill="#000000" text-anchor="middle">5.15.148-tegra</text>
+<text x="1050" y="177" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">stock kernel, no SCTP</text>
+<text x="1050" y="235" font-size="15" letter-spacing="1.2" fill="#000000" text-anchor="middle">OAI-SCTP</text>
+<rect x="960.0" y="245.0" width="180" height="50" fill="#FFFFFF" stroke="#000000" stroke-width="2.2"/>
+<text x="1050" y="276" font-size="18" fill="#000000" text-anchor="middle">5.15.148-oai-sctp</text>
+<text x="1050" y="317" font-size="16" font-style="italic" fill="#000000" text-anchor="middle">SCTP and NVIDIA OOT modules</text>
+<text x="70" y="372" font-size="17" fill="#000000" text-anchor="start">Both entries boot with the same APPEND and FDT lines.</text>
+<text x="70" y="398" font-size="17" fill="#000000" text-anchor="start">Each kernel release keeps its own /lib/modules directory.</text>
+<text x="70" y="424" font-size="17" fill="#000000" text-anchor="start">extlinux.conf is backed up before every change.</text>
+<text x="70" y="472" font-size="18" fill="#000000">Fig. 1.  Build and boot path. The installer adds a custom entry beside the stock entry, which stays as the rollback path.</text>
+</svg>
