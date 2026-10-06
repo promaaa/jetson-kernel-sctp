@@ -11,8 +11,6 @@ CONFIG_PATH="$1"
 KERNEL_RELEASE="$2"
 ACTIVATE="$3"
 LABEL="oai-sctp"
-IMAGE_PATH="/boot/Image-${KERNEL_RELEASE}"
-INITRD_PATH="/boot/initrd.img-${KERNEL_RELEASE}"
 
 [[ -f "${CONFIG_PATH}" ]] || {
     printf 'ERROR: %s does not exist\n' "${CONFIG_PATH}" >&2
@@ -23,29 +21,27 @@ INITRD_PATH="/boot/initrd.img-${KERNEL_RELEASE}"
     exit 2
 }
 
-ROOT_LINE="$(
+# Copy every boot option of the stock entry (APPEND, FDT, OVERLAYS), so the
+# custom entry differs from it only by its kernel image and initrd.
+PRIMARY_OPTIONS="$(
     awk '
-        /^[[:space:]]*LABEL[[:space:]]+primary[[:space:]]*$/ { in_primary=1; next }
-        in_primary && /^[[:space:]]*LABEL[[:space:]]+/ { in_primary=0 }
-        in_primary && /^[[:space:]]*APPEND[[:space:]]+/ {
-            sub(/^[[:space:]]*/, "")
+        $1 == "LABEL" { in_primary = ($2 == "primary"); next }
+        in_primary && NF && $1 !~ /^#/ && $1 != "MENU" && $1 != "LINUX" && $1 != "INITRD" {
+            sub(/^[[:space:]]*/, "      ")
             print
-            exit
         }
     ' "${CONFIG_PATH}"
 )"
-if [[ -z "${ROOT_LINE}" ]]; then
-    ROOT_LINE="$(awk '/^[[:space:]]*APPEND[[:space:]]+/ {sub(/^[[:space:]]*/, ""); print; exit}' "${CONFIG_PATH}")"
-fi
-[[ -n "${ROOT_LINE}" ]] || {
-    printf 'ERROR: no APPEND line found in %s\n' "${CONFIG_PATH}" >&2
+# The stock entry is the rollback path, so refuse to continue without it.
+grep -q '^ *APPEND ' <<<"${PRIMARY_OPTIONS}" || {
+    printf 'ERROR: no LABEL primary entry with an APPEND line in %s\n' "${CONFIG_PATH}" >&2
     exit 1
 }
 
 TMP_PATH="$(mktemp "${CONFIG_PATH}.tmp.XXXXXX")"
 trap 'rm -f "${TMP_PATH}"' EXIT
 
-awk '
+awk -v activate="${ACTIVATE}" -v label="${LABEL}" '
     function emit(line) {
         if (line ~ /^[[:space:]]*$/) {
             blanks++
@@ -57,36 +53,29 @@ awk '
         }
         print line
     }
-    /^[[:space:]]*LABEL[[:space:]]+oai-sctp[[:space:]]*$/ { skip=1; next }
-    skip && /^[[:space:]]*LABEL[[:space:]]+/ { skip=0 }
-    !skip { emit($0) }
+    $1 == "LABEL" { skip = ($2 == label) }
+    skip { next }
+    activate == 1 && $1 == "DEFAULT" && !defaulted {
+        $0 = "DEFAULT " label
+        defaulted = 1
+    }
+    { emit($0) }
+    END {
+        if (activate == 1 && !defaulted) print "DEFAULT " label
+    }
 ' "${CONFIG_PATH}" >"${TMP_PATH}"
 
 {
     printf '\nLABEL %s\n' "${LABEL}"
     printf '      MENU LABEL custom SCTP kernel %s\n' "${KERNEL_RELEASE}"
-    printf '      LINUX %s\n' "${IMAGE_PATH}"
-    printf '      INITRD %s\n' "${INITRD_PATH}"
-    printf '      %s\n' "${ROOT_LINE}"
+    printf '      LINUX /boot/Image-%s\n' "${KERNEL_RELEASE}"
+    printf '      INITRD /boot/initrd.img-%s\n' "${KERNEL_RELEASE}"
+    printf '%s\n' "${PRIMARY_OPTIONS}"
 } >>"${TMP_PATH}"
 
-if [[ "${ACTIVATE}" == "1" ]]; then
-    ACTIVE_PATH="$(mktemp "${CONFIG_PATH}.active.XXXXXX")"
-    trap 'rm -f "${TMP_PATH}" "${ACTIVE_PATH}"' EXIT
-    awk '
-        BEGIN { replaced=0 }
-        /^[[:space:]]*DEFAULT[[:space:]]+/ && !replaced {
-            print "DEFAULT oai-sctp"
-            replaced=1
-            next
-        }
-        { print }
-        END {
-            if (!replaced) print "DEFAULT oai-sctp"
-        }
-    ' "${TMP_PATH}" >"${ACTIVE_PATH}"
-    cp "${ACTIVE_PATH}" "${TMP_PATH}"
-fi
-
-cat "${TMP_PATH}" >"${CONFIG_PATH}"
+# One rename replaces the file, so an interrupted run never leaves a
+# truncated boot configuration.
+chmod --reference="${CONFIG_PATH}" "${TMP_PATH}"
+chown --reference="${CONFIG_PATH}" "${TMP_PATH}"
+mv -f "${TMP_PATH}" "${CONFIG_PATH}"
 printf 'Updated %s with LABEL %s\n' "${CONFIG_PATH}" "${LABEL}"
