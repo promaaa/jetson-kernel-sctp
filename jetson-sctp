@@ -1,0 +1,290 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/scripts" && pwd)"
+# shellcheck source=scripts/common.sh
+source "${SCRIPT_DIR}/common.sh"
+
+usage() {
+    cat <<EOF
+Usage: ${TOOL} [command] [options]
+
+Build and install an SCTP-enabled kernel for the Jetson Orin Nano, beside the
+stock kernel. With no command, show the status and offer the next step.
+
+Commands:
+  status     Show the build, the installed kernel, the default entry and the running kernel
+  build      Build the kernel and its modules on the Jetson
+  install    Install the kernel beside the stock kernel
+  activate   Make oai-sctp the default boot entry
+  rollback   Make the stock primary entry the default again
+  verify     Check SCTP and the NVIDIA driver on the running kernel
+  uninstall  Remove the installed kernel, its modules and its boot entry
+  help       Show this help
+
+Options:
+  -v, --verbose  Show all command output
+  -y, --yes      Remove without a question (uninstall)
+
+Run "${TOOL} build --help" to see the build settings.
+EOF
+}
+
+# built_release: release of the finished build, or nothing
+built_release() {
+    [[ -f "${KERNEL_DIR}/arch/arm64/boot/Image" && -f "${SOURCE_ROOT}/build-inputs.txt" ]] || return 0
+    sed -n 's/^kernel_release=//p' "${SOURCE_ROOT}/build-inputs.txt"
+}
+
+# entry_release: release that the oai-sctp boot entry starts, or nothing
+entry_release() {
+    [[ -r "${EXTLINUX_CONF}" ]] || return 0
+    awk '
+        $1 == "LABEL" { in_entry = ($2 == "oai-sctp") }
+        in_entry && $1 == "LINUX" { sub(/^\/boot\/Image-/, "", $2); print $2; exit }
+    ' "${EXTLINUX_CONF}"
+}
+
+default_label() {
+    [[ -r "${EXTLINUX_CONF}" ]] || return 0
+    awk '$1 == "DEFAULT" { print $2; exit }' "${EXTLINUX_CONF}"
+}
+
+running_custom() {
+    [[ "$(uname -r)" == *"${CUSTOM_MARKER}"* ]]
+}
+
+# state <ok|todo|problem> <name> <text>: one line of the status list
+state() {
+    local mark="${DIM}${DOT}${RESET}"
+    case "$1" in
+        ok) mark="${GREEN}${OK_MARK}${RESET}" ;;
+        problem) mark="${RED}${FAIL_MARK}${RESET}" ;;
+    esac
+    printf '  %s %-10s %s\n' "${mark}" "$2" "$3"
+}
+
+next_steps() {
+    local number=1 item
+    printf '\n%s\n' "${BOLD}Next steps${RESET}"
+    for item in "$@"; do
+        printf '  %d. %s\n' "${number}" "${item}"
+        number=$((number + 1))
+    done
+}
+
+# show_status: print the status list and set NEXT_COMMAND and NEXT_TEXT
+show_status() {
+    local built installed default installed_ok=0
+    built="$(built_release)"
+    installed="$(entry_release)"
+    default="$(default_label)"
+    if [[ -n "${installed}" && -f "/boot/Image-${installed}" && -f "/boot/initrd.img-${installed}" ]]; then
+        installed_ok=1
+    fi
+
+    header "status"
+    if [[ -n "${built}" ]]; then
+        state ok "Built" "${built}"
+    else
+        state todo "Built" "not yet"
+    fi
+    if (( installed_ok == 1 )); then
+        state ok "Installed" "${installed}"
+    elif [[ -n "${installed}" ]]; then
+        state problem "Installed" "the oai-sctp entry exists, but /boot/Image-${installed} or its initrd is missing"
+    else
+        state todo "Installed" "not yet"
+    fi
+    if [[ ! -r "${EXTLINUX_CONF}" ]]; then
+        state problem "Default" "${EXTLINUX_CONF} not found"
+    elif [[ "${default}" == "oai-sctp" ]]; then
+        state ok "Default" "oai-sctp"
+    elif [[ "${default}" == "primary" ]]; then
+        state todo "Default" "primary (stock kernel)"
+    else
+        state todo "Default" "${default:-no DEFAULT line}"
+    fi
+    if running_custom; then
+        state ok "Running" "$(uname -r)"
+    else
+        state todo "Running" "$(uname -r)"
+    fi
+
+    if running_custom; then
+        NEXT_COMMAND="verify" NEXT_TEXT="check SCTP and the NVIDIA driver on this kernel."
+    elif (( installed_ok == 1 )) && [[ "${default}" == "oai-sctp" ]]; then
+        NEXT_COMMAND="reboot" NEXT_TEXT="reboot to start the SCTP kernel."
+    elif (( installed_ok == 1 )); then
+        NEXT_COMMAND="activate" NEXT_TEXT="make oai-sctp the default boot entry."
+    elif [[ -n "${built}" ]]; then
+        NEXT_COMMAND="install" NEXT_TEXT="install the kernel beside the stock kernel."
+    else
+        NEXT_COMMAND="build" NEXT_TEXT="build the kernel on this Jetson. This takes a long time."
+    fi
+    printf '\n%s %s\n' "${BOLD}Next:${RESET}" "${NEXT_TEXT}"
+}
+
+next_command_line() {
+    if [[ "${NEXT_COMMAND}" == "reboot" ]]; then
+        printf 'sudo reboot'
+    else
+        printf '%s %s' "${TOOL}" "${NEXT_COMMAND}"
+    fi
+}
+
+cmd_status() {
+    show_status
+    printf '%s %s\n' "${DIM}Run:${RESET}" "$(next_command_line)"
+}
+
+# With no command: show the status, then offer the next step on a terminal.
+cmd_guide() {
+    show_status
+    if [[ ! -t 0 ]]; then
+        printf '%s %s\n' "${DIM}Run:${RESET}" "$(next_command_line)"
+        return 0
+    fi
+    if [[ "${NEXT_COMMAND}" == "reboot" ]]; then
+        if confirm "Reboot now?" n; then
+            exec sudo reboot
+        fi
+    elif confirm "Run ${TOOL} ${NEXT_COMMAND} now?" y; then
+        printf '\n'
+        dispatch "${NEXT_COMMAND}"
+        return 0
+    fi
+    printf 'Run it later with: %s\n' "$(next_command_line)"
+}
+
+# set_default <label>: numbered steps that make <label> the default entry
+set_default() {
+    STEP_TOTAL=2
+    need_sudo "change ${EXTLINUX_CONF}"
+    backup_extlinux
+    step "Make $1 the default entry"
+    run sudo "${SCRIPT_DIR}/update_extlinux.sh" default "${EXTLINUX_CONF}" "$1"
+    end_step
+}
+
+cmd_activate() {
+    local release
+    start_log activate
+    header "activate"
+    release="$(entry_release)"
+    [[ -n "${release}" ]] || fail "the oai-sctp boot entry is not installed" "Run ${TOOL} install first."
+    [[ -f "/boot/Image-${release}" && -f "/boot/initrd.img-${release}" ]] ||
+        fail "the image or initrd of ${release} is missing in /boot" "Run ${TOOL} install again."
+    if [[ "$(default_label)" == "oai-sctp" ]]; then
+        printf 'oai-sctp is already the default boot entry.\n'
+    else
+        printf '\n'
+        set_default "oai-sctp"
+        printf '\n%s\n' "${GREEN}${BOLD}oai-sctp is now the default boot entry.${RESET}"
+    fi
+    if ! running_custom; then
+        next_steps "sudo reboot" "${TOOL} verify"
+        printf '\n%s\n' "${DIM}To go back to the stock kernel: ${TOOL} rollback, then reboot.${RESET}"
+    fi
+}
+
+cmd_rollback() {
+    start_log rollback
+    header "rollback"
+    if [[ "$(default_label)" == "primary" ]]; then
+        printf 'primary (stock kernel) is already the default boot entry.\n'
+    else
+        printf '\n'
+        set_default "primary"
+        printf '\n%s\n' "${GREEN}${BOLD}primary (stock kernel) is now the default boot entry.${RESET}"
+    fi
+    if running_custom; then
+        next_steps "sudo reboot"
+    fi
+}
+
+cmd_uninstall() {
+    local release entry targets=() path
+    start_log uninstall
+    header "uninstall"
+    entry="$(entry_release)"
+    release="${entry:-$(built_release)}"
+    if [[ -n "${release}" ]]; then
+        [[ "${release}" =~ ^[0-9A-Za-z._+-]+$ && "${release}" == *"${CUSTOM_MARKER}"* ]] ||
+            fail "unexpected kernel release '${release}'" "Remove its files by hand."
+        for path in "/boot/Image-${release}" "/boot/initrd.img-${release}" "/lib/modules/${release}"; do
+            if [[ -e "${path}" ]]; then
+                targets+=("${path}")
+            fi
+        done
+    fi
+    if [[ -z "${entry}" ]] && (( ${#targets[@]} == 0 )); then
+        printf 'Nothing to remove: there is no oai-sctp entry and no installed kernel file.\n'
+        return 0
+    fi
+    [[ "$(uname -r)" != "${release}" ]] ||
+        fail "this board is running ${release} now" \
+            "Go back to the stock kernel first: ${TOOL} rollback, then sudo reboot."
+
+    printf '\nThis removes:\n'
+    for path in "${targets[@]}"; do
+        printf '  %s\n' "${path}"
+    done
+    if [[ -n "${entry}" ]]; then
+        printf '  the oai-sctp entry in %s\n' "${EXTLINUX_CONF}"
+    fi
+    printf '%s\n\n' "${DIM}The build in $(pretty_path "${WORKSPACE_DIR}") stays.${RESET}"
+    if (( YES == 0 )) && ! confirm "Remove them?" n; then
+        printf 'Nothing was removed.'
+        [[ -t 0 ]] || printf ' Use --yes to remove without a question.'
+        printf '\n'
+        return 0
+    fi
+
+    printf '\n'
+    STEP_TOTAL=3
+    need_sudo "remove files in /boot and /lib/modules"
+    backup_extlinux
+    step "Remove boot entry"
+    if [[ -n "${entry}" ]]; then
+        run sudo "${SCRIPT_DIR}/update_extlinux.sh" remove "${EXTLINUX_CONF}"
+        end_step "default: $(default_label)"
+    else
+        end_step "no entry"
+    fi
+    step "Remove kernel files"
+    if (( ${#targets[@]} > 0 )); then
+        run sudo rm -rf -- "${targets[@]}"
+    fi
+    end_step "${#targets[@]} paths"
+
+    printf '\n%s\n' "${GREEN}${BOLD}Removed ${release}.${RESET} The stock kernel is the default."
+    printf '%s\n' "${DIM}To also delete the build: rm -rf $(pretty_path "${WORKSPACE_DIR}")${RESET}"
+}
+
+# dispatch <command> [options]
+dispatch() {
+    local command=$1
+    shift
+    case "${command}" in
+        build | install | verify) exec "${SCRIPT_DIR}/${command}_kernel.sh" "$@" ;;
+    esac
+    for arg in "$@"; do
+        case "${arg}" in
+            -v | --verbose) VERBOSE=1 ;;
+            -y | --yes) YES=1 ;;
+            -h | --help) usage; exit 0 ;;
+            *) fail "unknown option: ${arg}" "Run ${TOOL} help to see the options." ;;
+        esac
+    done
+    "cmd_${command}"
+}
+
+YES=0
+case "${1:-}" in
+    "") dispatch guide ;;
+    help | -h | --help) usage ;;
+    status | build | install | activate | rollback | verify | uninstall) dispatch "$@" ;;
+    *) fail "unknown command: $1" "Run ${TOOL} help to see the commands." ;;
+esac

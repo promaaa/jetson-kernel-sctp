@@ -11,10 +11,20 @@ TMP_DIR="$(mktemp -d)"
 CONFIG="${TMP_DIR}/extlinux.conf"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
+# expect_failure <command...>: the command must fail and leave the file as is
+expect_failure() {
+    cp "${CONFIG}" "${TMP_DIR}/before.conf"
+    if "$@" 2>/dev/null; then
+        printf 'FAIL: this command succeeded: %s\n' "$*" >&2
+        exit 1
+    fi
+    cmp "${TMP_DIR}/before.conf" "${CONFIG}"
+}
+
 cp "${FIXTURE}" "${CONFIG}"
 chmod 0644 "${CONFIG}"
 
-"${UPDATE}" "${CONFIG}" "${RELEASE}" 0
+"${UPDATE}" add "${CONFIG}" "${RELEASE}" 0
 grep -qx 'DEFAULT primary' "${CONFIG}"
 [[ "$(grep -c '^LABEL oai-sctp$' "${CONFIG}")" == "1" ]]
 [[ "$(stat --format='%a' "${CONFIG}")" == "644" ]]
@@ -30,23 +40,30 @@ LABEL oai-sctp
       APPEND \${cbootargs} root=PARTUUID=<root-partuuid> rw rootwait
 EOF
 
-cp "${CONFIG}" "${TMP_DIR}/first.conf"
-"${UPDATE}" "${CONFIG}" "${RELEASE}" 0
-cmp "${TMP_DIR}/first.conf" "${CONFIG}"
+cp "${CONFIG}" "${TMP_DIR}/added.conf"
+"${UPDATE}" add "${CONFIG}" "${RELEASE}" 0
+cmp "${TMP_DIR}/added.conf" "${CONFIG}"
 
-"${UPDATE}" "${CONFIG}" "${RELEASE}" 1
+"${UPDATE}" add "${CONFIG}" "${RELEASE}" 1
 grep -qx 'DEFAULT oai-sctp' "${CONFIG}"
 [[ "$(grep -c '^LABEL oai-sctp$' "${CONFIG}")" == "1" ]]
 grep -qx 'LABEL primary' "${CONFIG}"
 grep -qx 'LABEL recovery' "${CONFIG}"
 
-# Without the stock entry there is no rollback path, so the file stays as is.
-grep -v 'LABEL primary' "${FIXTURE}" >"${TMP_DIR}/no-primary.conf"
-cp "${TMP_DIR}/no-primary.conf" "${TMP_DIR}/no-primary.orig"
-if "${UPDATE}" "${TMP_DIR}/no-primary.conf" "${RELEASE}" 1 2>/dev/null; then
-    printf 'FAIL: update accepted a configuration without LABEL primary\n' >&2
-    exit 1
-fi
-cmp "${TMP_DIR}/no-primary.orig" "${TMP_DIR}/no-primary.conf"
+# Rolling back and activating again only switch DEFAULT.
+"${UPDATE}" default "${CONFIG}" primary
+cmp "${TMP_DIR}/added.conf" "${CONFIG}"
+"${UPDATE}" default "${CONFIG}" oai-sctp
+grep -qx 'DEFAULT oai-sctp' "${CONFIG}"
+expect_failure "${UPDATE}" default "${CONFIG}" missing-entry
 
-printf '%s\n' "PASS: extlinux update copies the stock options, is idempotent and keeps rollback entries"
+# Removing the active entry gives back the stock file, with DEFAULT primary.
+"${UPDATE}" remove "${CONFIG}"
+cmp "${FIXTURE}" "${CONFIG}"
+expect_failure "${UPDATE}" default "${CONFIG}" oai-sctp
+
+# Without the stock entry there is no rollback path, so the file stays as is.
+grep -v 'LABEL primary' "${FIXTURE}" >"${CONFIG}"
+expect_failure "${UPDATE}" add "${CONFIG}" "${RELEASE}" 1
+
+printf '%s\n' "PASS: extlinux add, default and remove keep the stock entries and are idempotent"
