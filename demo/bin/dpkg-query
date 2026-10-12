@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "package=bc version=1.07.1-3build1"
+echo "package=flex version=2.6.4-8build2"

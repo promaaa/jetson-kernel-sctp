@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Fake kernel and NVIDIA module builds with Kbuild-like output.
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+dir="" targets=()
+while (( $# )); do
+    case "$1" in
+        -C) dir="$2"; shift 2 ;;
+        -s | -j*) shift ;;
+        *=*) shift ;;
+        *) targets+=("$1"); shift ;;
+    esac
+done
+release="5.15.148-oai-sctp"
+kernel_files=(
+    scripts/mod/modpost init/main.o init/version.o kernel/fork.o kernel/sched/core.o
+    kernel/time/timer.o mm/page_alloc.o mm/slub.o fs/ext4/inode.o fs/ext4/super.o
+    net/core/dev.o net/core/skbuff.o net/ipv4/tcp.o net/ipv4/udp.o net/ipv6/addrconf.o
+    net/sctp/sm_statetable.o net/sctp/sm_statefuns.o net/sctp/sm_sideeffect.o
+    net/sctp/protocol.o net/sctp/endpointola.o net/sctp/associola.o net/sctp/transport.o
+    net/sctp/chunk.o net/sctp/sm_make_chunk.o net/sctp/ulpevent.o net/sctp/inqueue.o
+    net/sctp/outqueue.o net/sctp/ulpqueue.o net/sctp/tsnmap.o net/sctp/bind_addr.o
+    net/sctp/socket.o net/sctp/primitive.o net/sctp/output.o net/sctp/input.o
+    net/sctp/debug.o net/sctp/stream.o net/sctp/auth.o net/sctp/offload.o
+    net/sctp/stream_sched.o net/sctp/ipv6.o net/sctp/diag.o
+    drivers/net/ethernet/realtek/r8169_main.o drivers/usb/core/hub.o
+    drivers/usb/host/xhci.o drivers/mmc/core/core.o drivers/nvme/host/core.o
+    sound/core/pcm.o crypto/aes_generic.o lib/string.o
+)
+for target in "${targets[@]}"; do
+    case "${target}" in
+        kernelrelease) echo "${release}" ;;
+        mrproper)
+            echo "  CLEAN   scripts/basic"; nap 0.3
+            echo "  CLEAN   scripts/kconfig"; nap 0.3
+            ;;
+        defconfig | olddefconfig)
+            echo "  HOSTCC  scripts/basic/fixdep"; nap 0.4
+            echo "  HOSTCC  scripts/kconfig/conf.o"; nap 0.4
+            echo "#"; echo "# configuration written to .config"; echo "#"
+            touch "${dir}/.config"
+            ;;
+        Image)
+            for file in "${kernel_files[@]}"; do
+                echo "  CC      ${file}"; nap 0.25
+                if [[ "${DEMO_FAIL:-}" == "build" && "${file}" == "net/sctp/socket.o" ]]; then
+                    echo "net/sctp/socket.c: In function 'sctp_sendmsg':"
+                    echo "net/sctp/socket.c:2027:9: error: 'sinfo' undeclared (first use in this function)"
+                    echo "make[3]: *** [scripts/Makefile.build:289: net/sctp/socket.o] Error 1"
+                    echo "make[2]: *** [scripts/Makefile.build:552: net/sctp] Error 2"
+                    echo "make[1]: *** [Makefile:1906: net] Error 2"
+                    echo "make: *** Waiting for unfinished jobs...."
+                    nap 1
+                    exit 2
+                fi
+            done
+            echo "  LD      vmlinux.o"; nap 1
+            echo "  LD      vmlinux"; nap 1
+            echo "  OBJCOPY arch/arm64/boot/Image"; nap 0.5
+            mkdir -p "${dir}/arch/arm64/boot"
+            touch "${dir}/arch/arm64/boot/Image"
+            ;;
+        modules)
+            if [[ "${dir}" == *kernel-jammy-src ]]; then
+                for module in net/sctp/sctp.ko net/sctp/sctp_diag.ko drivers/net/usb/r8152.ko; do
+                    echo "  LD [M]  ${module}"; nap 0.3
+                done
+            else
+                for file in nvidia-oot/drivers/gpu/host1x/dev.o nvidia-oot/drivers/video/tegra/nvmap/nvmap_core.o \
+                    nvidia-oot/drivers/net/ethernet/nvidia/nvethernet/ether_linux.o \
+                    nvgpu/drivers/gpu/nvgpu/os/linux/module.o nvgpu/drivers/gpu/nvgpu/common/fifo/channel.o \
+                    hwpm/drivers/tegra/hwpm/os/linux/driver.o nvdisplay/kernel-open/nvidia/nv.o \
+                    nvdisplay/kernel-open/nvidia-modeset/nvidia-modeset-linux.o; do
+                    echo "  CC [M]  ${file}"; nap 0.6
+                done
+                echo "  LD [M]  nvgpu/drivers/gpu/nvgpu/nvgpu.ko"; nap 0.5
+            fi
+            ;;
+        modules_install)
+            if [[ "${dir}" == *kernel-jammy-src ]]; then
+                mkdir -p "/lib/modules/${release}/kernel/net/sctp"
+                touch "/lib/modules/${release}/kernel/net/sctp/sctp.ko"
+                echo "  INSTALL /lib/modules/${release}/kernel/net/sctp/sctp.ko"; nap 0.6
+                echo "  DEPMOD  /lib/modules/${release}"; nap 0.4
+            else
+                mkdir -p "/lib/modules/${release}/updates"
+                echo "  INSTALL /lib/modules/${release}/updates/nvgpu.ko"; nap 0.6
+            fi
+            ;;
+    esac
+done

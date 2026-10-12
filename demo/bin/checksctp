@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+if running_custom; then echo "SCTP supported"; else echo "checksctp: Protocol not supported"; exit 1; fi

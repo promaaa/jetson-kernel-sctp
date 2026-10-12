@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Fake sudo: the demo shell is already a private root, so run the command directly.
+while [[ "${1:-}" == -* ]]; do
+    case "$1" in
+        -v) exit 0 ;;
+        *) shift ;;
+    esac
+done
+# The build sets permissions on /swapfile_build, which the demo cannot create.
+[[ "${1:-}" == "chmod" && "${3:-}" == "/swapfile_build" ]] && exit 0
+exec env "$@"

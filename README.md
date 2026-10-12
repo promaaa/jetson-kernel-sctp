@@ -1,6 +1,6 @@
 # Jetson Orin Nano SCTP Kernel
 
-**[Quick start](#quick-start)** · **[Rollback](#rollback)** · **[Pinned sources](sources.env)** · **[OAI split-DU testbed](https://github.com/promaaa/oai-cu-du-lab)** · **[Paper (PDF)](https://github.com/promaaa/oai-cu-du-lab/blob/main/docs/PDFs/research-paper.pdf)**
+**[Quick start](#quick-start)** · **[Demo](#try-it-without-a-jetson)** · **[Rollback](#rollback-and-removal)** · **[Pinned sources](sources.env)** · **[OAI split-DU testbed](https://github.com/promaaa/oai-cu-du-lab)** · **[Paper (PDF)](https://github.com/promaaa/oai-cu-du-lab/blob/main/docs/PDFs/research-paper.pdf)**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/promaaa/jetson-kernel-sctp/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/promaaa/jetson-kernel-sctp/actions/workflows/ci.yml)
 [![Jetson Orin Nano](https://img.shields.io/badge/Jetson-Orin%20Nano-76b900?style=flat-square&logo=nvidia&logoColor=white)](#at-a-glance)
@@ -86,6 +86,20 @@ The build and install show one line per step, with a running clock and the newes
 
 The full output of every command goes to a log in `~/jetson-kernel-build/logs/`. When a step fails, the tool marks it with `✗`, shows the last lines of the log, and names the failed command and the log file. Use `--verbose` to see all output in the terminal. Pipes and CI logs always get all output. Colors follow [`NO_COLOR`](https://no-color.org).
 
+## Try it without a Jetson
+
+The demo opens a shell on a fake Jetson Orin Nano, on a Linux computer. `./jetson-sctp` runs the real code there, but `make`, `apt-get`, `wget`, `sudo`, `reboot` and a few other tools are fakes that print sample output. A demo build takes about 40 seconds.
+
+```bash
+git clone https://github.com/promaaa/jetson-kernel-sctp.git
+cd jetson-kernel-sctp
+demo/start
+```
+
+In the demo shell, run `./jetson-sctp` and follow the steps. `sudo reboot` starts the default entry of the fake board. `DEMO_FAIL=build ./jetson-sctp build` shows a failed build, and `DEMO_SPEED=5` makes the demo five times faster. Type `exit` to leave.
+
+The demo runs in a private mount namespace, where empty in-memory folders cover `/boot`, `/lib/modules` and the home folder. Nothing outside the demo shell changes, and everything resets when it exits. The demo needs unprivileged user namespaces. Arch Linux allows them. Ubuntu 24.04 and later restrict them by default, so the demo may not start there.
+
 ## Commands
 
 | Task | Command |
@@ -158,7 +172,7 @@ If the custom kernel does not boot, select the stock `primary` entry in the boot
 CI checks the shell scripts, the pinned source metadata, the boot-entry changes and the terminal output, and scans the Git history for secrets. It does not compile the Jetson kernel.
 
 ```bash
-shellcheck jetson-sctp scripts/*.sh tests/*.sh
+shellcheck jetson-sctp scripts/*.sh tests/*.sh demo/start demo/rc demo/lib.sh demo/bin/*
 tests/extlinux.test.sh
 tests/ui.test.sh
 ```
@@ -177,6 +191,7 @@ The boot-entry test checks that the custom entry copies the stock options, that 
 | [`scripts/common.sh`](scripts/common.sh) | Shared paths, steps, logs and error reports |
 | [`sources.env`](sources.env) | Pinned NVIDIA source bundle |
 | [`tests/`](tests/) | Boot-entry and output tests, with an `extlinux.conf` fixture |
+| [`demo/`](demo/) | Fake Jetson shell for trying the tool on a Linux computer |
 
 ## Citation
 

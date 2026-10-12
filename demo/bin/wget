@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+for arg; do [[ "${arg}" == --output-document=* ]] && out="${arg#*=}"; done
+echo "Resolving developer.download.nvidia.com... 23.50.129.105"
+echo "HTTP request sent, awaiting response... 200 OK"
+echo "Length: 226164437 (216M) [application/x-bzip2]"
+for percent in 4 11 19 27 35 44 52 60 69 77 85 93 100; do
+    printf '%6dK ........ ........ ........ ........ ........ ........ %3d%% 41.2M 1s\n' $((percent * 2208)) "${percent}"
+    nap 0.4
+done
+truncate -s 226164437 "${out}"

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+case "${1:-}" in
+    -m) echo aarch64 ;;
+    -r) running_release ;;
+    *) echo Linux ;;
+esac

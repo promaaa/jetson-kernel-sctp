@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Fake extraction: tar -xjf <archive> -C <dir>
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+archive="$2" dir="$4"
+case "$(basename "${archive}")" in
+    public_sources*)
+        mkdir -p "${dir}/Linux_for_Tegra/source"
+        touch "${dir}/Linux_for_Tegra/source/"{kernel_src,kernel_oot_modules_src,nvidia_kernel_display_driver_source}.tbz2
+        ;;
+    kernel_src.tbz2)
+        kernel="${dir}/kernel/kernel-jammy-src"
+        mkdir -p "${kernel}/scripts"
+        cat >"${kernel}/scripts/config" <<'CONFIG'
+#!/bin/sh
+case "$3" in
+    --set-val) echo "$4=$5" >>"$2" ;;
+    --set-str) echo "$4=\"$5\"" >>"$2" ;;
+esac
+CONFIG
+        chmod +x "${kernel}/scripts/config"
+        ;;
+    kernel_oot_modules_src.tbz2) touch "${dir}/Makefile" ;;
+esac
+nap 1.5

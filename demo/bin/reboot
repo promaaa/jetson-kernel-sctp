@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Fake reboot: start the kernel of the DEFAULT entry in /boot/extlinux/extlinux.conf.
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+conf=/boot/extlinux/extlinux.conf
+label="$(awk '$1 == "DEFAULT" { print $2; exit }' "${conf}")"
+image="$(awk -v label="${label}" '$1 == "LABEL" { in_entry = ($2 == label) }
+    in_entry && $1 == "LINUX" { print $2; exit }' "${conf}")"
+release="5.15.148-tegra"
+[[ "${image}" == /boot/Image-* ]] && release="${image#/boot/Image-}"
+printf '\n  [demo] Rebooting...'
+nap 1; printf '.'; nap 1; printf '.\n'
+if [[ "${image}" != "/boot/Image" && ! -f "${image}" ]]; then
+    printf '  [demo] %s does not exist. The boot loader would fall back to the stock kernel.\n' "${image}"
+    release="5.15.148-tegra"
+fi
+printf '%s\n' "${release}" >"${DEMO_DIR}/session/running"
+printf '  [demo] The board started entry "%s", kernel %s.\n\n' "${label}" "${release}"

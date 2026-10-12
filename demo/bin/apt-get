@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+if [[ "$1" == "update" ]]; then
+    for line in "Hit:1 http://ports.ubuntu.com/ubuntu-ports jammy InRelease" \
+        "Get:2 http://ports.ubuntu.com/ubuntu-ports jammy-updates InRelease [128 kB]" \
+        "Hit:3 https://repo.download.nvidia.com/jetson/common r36.4 InRelease" \
+        "Get:4 http://ports.ubuntu.com/ubuntu-ports jammy-security InRelease [129 kB]" \
+        "Fetched 257 kB in 2s (128 kB/s)" "Reading package lists..."; do
+        echo "${line}"; nap 0.4
+    done
+else
+    for line in "Reading package lists..." "Building dependency tree..." "Reading state information..." \
+        "bc is already the newest version (1.07.1-3build1)." \
+        "lksctp-tools is already the newest version (1.0.19+dfsg-1build1)." \
+        "0 upgraded, 0 newly installed, 0 to remove and 12 not upgraded."; do
+        echo "${line}"; nap 0.3
+    done
+fi

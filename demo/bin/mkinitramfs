@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+echo "mkinitramfs: building $3"; nap 1.5
+touch "$2"

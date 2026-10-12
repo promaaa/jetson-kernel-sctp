@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Open a shell on a fake Jetson, where ./jetson-sctp runs against fake commands.
+# /boot, /lib/modules and the home folder are empty, private and in memory.
+# Nothing outside this shell changes, and everything resets when it exits.
+
+set -euo pipefail
+
+DEMO_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+export DEMO_DIR
+mkdir -p "${DEMO_DIR}/session"
+if ! unshare --map-root-user --mount true 2>/dev/null; then
+    printf 'error: this demo needs unprivileged user namespaces, and this system does not allow them.\n' >&2
+    exit 1
+fi
+exec unshare --map-root-user --mount bash --rcfile "${DEMO_DIR}/rc" -i

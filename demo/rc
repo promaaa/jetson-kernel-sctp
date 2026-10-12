@@ -1,0 +1,40 @@
+# shellcheck shell=bash
+# Shell setup for demo/start. Runs inside a private mount namespace.
+
+# DEMO_DIR comes from demo/start.
+# shellcheck disable=SC2153
+REPO_DIR="$(cd -- "${DEMO_DIR}/.." && pwd)"
+
+# Empty, in-memory folders that hide the real ones only inside this shell
+mount -t tmpfs demo /boot
+mount -t tmpfs demo "$(readlink -f /lib/modules)"
+mount -t tmpfs demo "${DEMO_DIR}/session"
+
+# A stock Jetson: kernel, initrd, modules and the boot menu
+mkdir -p /boot/extlinux /boot/dtb "/lib/modules/5.15.148-tegra/kernel" "${DEMO_DIR}/session/home"
+touch /boot/Image /boot/initrd /boot/dtb/kernel_tegra234-p3768-0000+p3767-0005-nv.dtb
+sed 's/<root-partuuid>/4842dbf5-9a9b-45b9-9905-ef6688e1c949/' \
+    "${REPO_DIR}/tests/fixtures/extlinux.conf" >/boot/extlinux/extlinux.conf
+printf '5.15.148-tegra\n' >"${DEMO_DIR}/session/running"
+
+export HOME="${DEMO_DIR}/session/home"
+export PATH="${DEMO_DIR}/bin:${PATH}"
+export DEMO_SPEED="${DEMO_SPEED:-1}"
+unset SSH_CONNECTION TMUX STY
+PS1='\[\e[32m\]jetson\[\e[0m\] (demo) \w $ '
+cd "${REPO_DIR}" || exit 1
+
+cat <<EOF
+
+  This is a fake Jetson Orin Nano for trying ./jetson-sctp.
+  The commands are real, but make, apt-get, wget, sudo and reboot are fakes.
+  Nothing outside this shell changes. Everything resets when you leave.
+
+  ./jetson-sctp                    start the guided flow
+  sudo reboot                      boot the default entry of the fake board
+  DEMO_SPEED=5 ./jetson-sctp build build five times faster
+  DEMO_FAIL=build ./jetson-sctp build   see a failed build
+  SSH_CONNECTION=x ./jetson-sctp build  see the SSH warning
+  exit                             leave the demo
+
+EOF

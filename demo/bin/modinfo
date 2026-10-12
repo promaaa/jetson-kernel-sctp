@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+path="/lib/modules/$(running_release)/kernel/net/sctp/sctp.ko"
+if [[ "$1" == "-n" ]]; then
+    echo "${path}"
+else
+    printf 'filename:       %s\nalias:          net-pf-10-proto-132\nlicense:        GPL\ndescription:    Support for the SCTP protocol (RFC2960)\nvermagic:       %s SMP preempt mod_unload aarch64\n' "${path}" "$(running_release)"
+fi

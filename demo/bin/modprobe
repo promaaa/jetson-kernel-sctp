@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# shellcheck source=../lib.sh
+source "${DEMO_DIR}/lib.sh"
+running_custom && exit 0
+echo "modprobe: FATAL: Module sctp not found in directory /lib/modules/$(running_release)" >&2
+exit 1

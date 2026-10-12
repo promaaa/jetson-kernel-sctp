@@ -1,0 +1,2 @@
+#!/bin/sh
+printf "               total        used        free\nMem:               7           1           5\nSwap:              3           0           3\n"
